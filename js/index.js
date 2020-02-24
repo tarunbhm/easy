@@ -1,6 +1,7 @@
 'use strict'
 
-var roomName = 'test';
+var roomName = window.location.hash.substr(1);
+console.log(roomName);
 var drone = new Scaledrone('W2kIqjAdHe5zpquw');
 drone.on('open', function(error){
   if (error) {
@@ -58,6 +59,8 @@ closeButton.onclick = close;
 sendButton.disabled = true;
 closeButton.disabled = true;
 
+var audioElement = document.getElementById("audio");
+
 var connection;
 var pcConstraint;
 var connectionConfiguration = {
@@ -66,6 +69,10 @@ var connectionConfiguration = {
       urls: "stun:stun.stunprotocol.org"
     }
   ]
+};
+var mediaConstraints = {
+  audio: true // We want an audio track
+  //video: true // ...and we want a video track
 };
 var dataChannel;
 
@@ -93,24 +100,30 @@ function createConnection(isStarting) {
   connection = new RTCPeerConnection(connectionConfiguration, pcConstraint);
 
   connection.onicecandidate = handleICECandidateEvent;
-  //myPeerConnection.ontrack = handleTrackEvent;
+  connection.ontrack = handleTrackEvent;
   connection.onnegotiationneeded = handleNegotiationNeededEvent;
-  //myPeerConnection.onremovetrack = handleRemoveTrackEvent;
+  connection.onremovetrack = handleRemoveTrackEvent;
   connection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
   connection.onicegatheringstatechange = handleICEGatheringStateChangeEvent;
   connection.onsignalingstatechange = handleSignalingStateChangeEvent;
 
-  if(isStarting){
-    dataChannel = connection.createDataChannel('data-channel');
-    onDataChannelCreated(dataChannel);
-  } else {
-    connection.ondatachannel = function(event){
-      dataChannel = event.channel;
-      onDataChannelCreated(dataChannel);
-    }
-    startButton.disabled = true;
-    closeButton.disabled = false;
-  } 
+  navigator.mediaDevices.getUserMedia(mediaConstraints)
+    .then(function(stream) {
+      stream.getTracks().forEach(track => connection.addTrack(track, stream));
+    })
+    .catch(handleGetUserMediaError);
+
+  // if(isStarting){
+  //   dataChannel = connection.createDataChannel('data-channel');
+  //   onDataChannelCreated(dataChannel);
+  // } else {
+  //   connection.ondatachannel = function(event){
+  //     dataChannel = event.channel;
+  //     onDataChannelCreated(dataChannel);
+  //   }
+  //   startButton.disabled = true;
+  //   closeButton.disabled = false;
+  // } 
 }
 
 function handleNegotiationNeededEvent(){
@@ -129,6 +142,12 @@ function handleOfferSignal(message){
   var desc = new RTCSessionDescription(message.data);
 
   connection.setRemoteDescription(desc).then(function() {
+    return navigator.mediaDevices.getUserMedia(mediaConstraints);
+  })
+  .then(function(stream) {
+    stream.getTracks().forEach(track => connection.addTrack(track, stream));
+  })
+  .then(function() {
     return connection.createAnswer();
   })
   .then(function(answer) {
@@ -137,12 +156,27 @@ function handleOfferSignal(message){
   .then(function() {
     sendSignal('answer', connection.localDescription);
   })
-  .catch(reportError);
+  .catch(handleGetUserMediaError);
 }
 
 function handleAnswerSignal(message){
   var desc = new RTCSessionDescription(message.data);
   connection.setRemoteDescription(desc);
+}
+
+function handleTrackEvent(event) {
+  audioElement.srcObject = event.streams[0];
+  startButton.disabled = true;
+  closeButton.disabled = false;
+}
+
+function handleRemoveTrackEvent(event) {
+  var stream = audioElement.srcObject;
+  var trackList = stream.getTracks();
+ 
+  if (trackList.length == 0) {
+    closeConnection();
+  }
 }
 
 function handleICECandidateEvent(event){
@@ -169,6 +203,10 @@ function closeConnection(){
     connection.onsignalingstatechange = null;
     connection.onicegatheringstatechange = null;
     connection.onnegotiationneeded = null;
+
+    if (audioElement.srcObject) {
+      audioElement.srcObject.getTracks().forEach(track => track.stop());
+    }
 
     connection.close();
     connection = null;
@@ -245,3 +283,20 @@ function reportError(error){
   console.log("error", error);
 }
 
+function handleGetUserMediaError(e) {
+  switch(e.name) {
+    case "NotFoundError":
+      alert("Unable to open your call because no camera and/or microphone" +
+            "were found.");
+      break;
+    case "SecurityError":
+    case "PermissionDeniedError":
+      // Do nothing; this is the same as the user canceling the call.
+      break;
+    default:
+      alert("Error opening your camera and/or microphone: " + e.message);
+      break;
+  }
+
+  closeConnection();
+}
